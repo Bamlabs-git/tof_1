@@ -1,16 +1,61 @@
 .vscode/
 .xmake/
+.cache/
 
 py_arducam/
 CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
 
 build/
+**/build/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/Makefile
 
 /ros2_publisher/install/
 /ros2_publisher/log/
+/ros2_publisher/build/
 /ros2_publisher/*.json
 /example/python/*.json
 
 *.patch
 /*.json
 /cali.bin
+
+# Runtime/generated data
+logs/
+**/logs/
+saved_data/
+**/saved_data/
+labeled_data/
+**/labeled_data/
+recorded_actions/
+**/recorded_actions/
+
+# Binary/build artifacts
+*.o
+*.a
+*.so
+*.so.*
+*.bin
+*.elf
+*.out
+*.exe
+
+# Captured media/data
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.png
+*.jpg
+*.jpeg
+*.npy
+*.npz
+*.pcd
+*.ply
+*.yml
+*.xml
