@@ -169,6 +169,19 @@ cd cpp_format_testing/virtual_wall_2/build
 ./simple_virtual_wall_monitor
 ```
 
+If the checked-in `build/` directory is root-owned or stale, build to a user-writable runtime directory instead:
+
+```bash
+cmake -S . -B /tmp/virtual_wall_2_build
+cmake --build /tmp/virtual_wall_2_build
+mkdir -p runtime
+cp /tmp/virtual_wall_2_build/simple_virtual_wall_monitor runtime/
+cp /tmp/virtual_wall_2_build/simple_virtual_wall_setup runtime/
+cp build/simple_virtual_wall_config.json runtime/
+cd runtime
+./simple_virtual_wall_monitor
+```
+
 **What happens:**
 
 1. **Loads configuration** from `simple_virtual_wall_config.json`
@@ -209,6 +222,8 @@ cd cpp_format_testing/virtual_wall_2/build
    ```bash
    recorded_actions/YYYY-MM-DD/action_000001_YYYYMMDD_HHMMSS_mmm_unknown/
    ```
+
+   The path is relative to the directory where the monitor is started. If you start it from `runtime/`, recordings are saved under `runtime/recorded_actions/`. If you start it from `build/`, recordings are saved under `build/recorded_actions/`.
 
    Folder contents:
    ```text

@@ -1,0 +1,42 @@
+{
+  "corners" : 
+  {
+    "lower_left" : 
+    {
+      "depth_mm" : 1097.1795654296875,
+      "x" : 1,
+      "y" : 80
+    },
+    "lower_right" : 
+    {
+      "depth_mm" : 1000.0,
+      "x" : 237,
+      "y" : 80
+    },
+    "upper_left" : 
+    {
+      "depth_mm" : 2000.0,
+      "x" : 1,
+      "y" : 103
+    },
+    "upper_right" : 
+    {
+      "depth_mm" : 1704.832763671875,
+      "x" : 238,
+      "y" : 103
+    }
+  },
+  "dimensions" : 
+  {
+    "actual_height_cm" : 124.0,
+    "actual_width_cm" : 80.0,
+    "penetration_threshold_mm" : 200.0,
+    "wall_depth_mm" : 1450.5030517578125
+  },
+  "metadata" : 
+  {
+    "creation_timestamp" : "20260812_082628_220",
+    "is_valid" : true,
+    "unique_id" : "evt_20260812_082628_705176"
+  }
+}
