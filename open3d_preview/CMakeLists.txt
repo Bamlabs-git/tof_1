@@ -24,6 +24,15 @@ if(Open3D_FOUND)
   target_link_libraries(preview_pointcloud PRIVATE
     ${CORE_LIBS}
   )
+  
+  # Dual camera point cloud application
+  add_executable(dual_preview_pointcloud dual_preview_pointcloud.cpp)
+  target_include_directories(dual_preview_pointcloud PRIVATE
+    ${OpenCV_INCLUDE_DIRS}
+  )
+  target_link_libraries(dual_preview_pointcloud PRIVATE
+    ${CORE_LIBS}
+  )
 else()
   message(WARNING "Open3D point cloud preview need libopen3d!")
 endif()

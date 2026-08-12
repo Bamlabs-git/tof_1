@@ -13,6 +13,10 @@ target_link_libraries(capture_raw ${CXXLIBS} ${OpenCV_LIBS})
 add_executable(preview_usb preview_by_usb.cpp)
 target_link_libraries(preview_usb ${CXXLIBS} ${OpenCV_LIBS})
 
+# Dual camera application
+add_executable(dual_preview_depth dual_preview_depth.cpp)
+target_link_libraries(dual_preview_depth ${CXXLIBS} ${OpenCV_LIBS} pthread)
+
 aux_source_directory(example DIR_SRCS)
 add_executable(example ${DIR_SRCS})
 target_link_libraries(example ${CXXLIBS} ${OpenCV_LIBS})

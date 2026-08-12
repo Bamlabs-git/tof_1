@@ -1,0 +1,48 @@
+cmake_minimum_required(VERSION 3.10)
+project(DualArducamToF)
+
+# Set C++ standard
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find required packages
+find_package(PkgConfig REQUIRED)
+find_package(OpenCV REQUIRED)
+
+# Find ArducamDepthCamera library
+pkg_check_modules(ARDUCAM_DEPTH_CAMERA REQUIRED ArducamDepthCamera)
+
+# Include directories
+include_directories(${OpenCV_INCLUDE_DIRS})
+include_directories(${ARDUCAM_DEPTH_CAMERA_INCLUDE_DIRS})
+
+# Add executable
+add_executable(dual_preview_depth dual_preview_depth.cpp)
+
+# Link libraries
+target_link_libraries(dual_preview_depth 
+    ${OpenCV_LIBS}
+    ${ARDUCAM_DEPTH_CAMERA_LIBRARIES}
+    pthread
+)
+
+# Compiler flags
+target_compile_options(dual_preview_depth PRIVATE ${ARDUCAM_DEPTH_CAMERA_CFLAGS_OTHER})
+
+# Set output directory
+set_target_properties(dual_preview_depth PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+
+print_status("")
+print_status("Dual ToF Camera Configuration:")
+print_status("  OpenCV version: ${OpenCV_VERSION}")
+print_status("  OpenCV libraries: ${OpenCV_LIBS}")
+print_status("  ArducamDepthCamera libraries: ${ARDUCAM_DEPTH_CAMERA_LIBRARIES}")
+print_status("  Build type: ${CMAKE_BUILD_TYPE}")
+print_status("")
+
+# Custom function to print status
+function(print_status text)
+    message(STATUS "${text}")
+endfunction()

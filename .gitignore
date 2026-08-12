@@ -1,6 +1,8 @@
 .vscode/
 .xmake/
 .cache/
+__pycache__/
+*.pyc
 
 py_arducam/
 CMakeFiles/
