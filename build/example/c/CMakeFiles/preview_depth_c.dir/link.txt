@@ -1,0 +1,1 @@
+/usr/bin/cc CMakeFiles/preview_depth_c.dir/preview_depth.c.o -o preview_depth_c  /usr/lib/libArducamDepthCamera4C.so /usr/lib/libsi4c.so 
