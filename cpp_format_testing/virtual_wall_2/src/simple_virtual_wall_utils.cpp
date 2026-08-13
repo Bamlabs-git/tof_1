@@ -746,7 +746,8 @@ std::vector<DepthCluster> SimpleVirtualWallUtils::createDepthClusters(
     const SimpleVirtualWallConfig& config,
     int confidence_threshold,
     float motion_threshold_mm,
-    float max_valid_depth_mm) {
+    float max_valid_depth_mm,
+    int min_valid_pixels) {
     
     std::vector<DepthCluster> clusters;
     
@@ -772,7 +773,7 @@ std::vector<DepthCluster> SimpleVirtualWallUtils::createDepthClusters(
                 depth_frame, confidence_frame, cluster.bounds, 
                 confidence_threshold, cluster.valid_pixel_count, max_valid_depth_mm);
             
-            if (cluster.median_depth == 0 || cluster.valid_pixel_count < 3) {
+            if (cluster.median_depth == 0 || cluster.valid_pixel_count < min_valid_pixels) {
                 continue; // Skip clusters with insufficient data
             }
             

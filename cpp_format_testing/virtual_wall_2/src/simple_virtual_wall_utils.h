@@ -261,7 +261,8 @@ public:
                                                          const SimpleVirtualWallConfig& config,
                                                          int confidence_threshold,
                                                          float motion_threshold_mm,
-                                                         float max_valid_depth_mm = 3500.0f);
+                                                         float max_valid_depth_mm = 3500.0f,
+                                                         int min_valid_pixels = 3);
     
     // ===========================================================================================
     // VISUALIZATION

@@ -127,6 +127,10 @@ private:
     int max_distance_;
     float max_valid_depth_mm_;
     float motion_threshold_mm_;
+    int min_valid_pixels_per_cluster_;
+    bool far_shelf_mode_;
+    float visualization_min_depth_mm_;
+    float visualization_max_depth_mm_;
     
     // Temporal filtering
     static const int TEMPORAL_FILTER_FRAMES = 3;
@@ -186,6 +190,10 @@ public:
         max_distance_(3500),
         max_valid_depth_mm_(3500.0f),
         motion_threshold_mm_(DEPTH_CHANGE_THRESHOLD),
+        min_valid_pixels_per_cluster_(3),
+        far_shelf_mode_(false),
+        visualization_min_depth_mm_(0.0f),
+        visualization_max_depth_mm_(3500.0f),
         recent_detections_(TEMPORAL_FILTER_FRAMES, false),
         temporal_filter_index_(0),
         recording_state_(RecordingState::IDLE),
@@ -489,6 +497,7 @@ private:
         float depth_p50 = percentile(depths, 50.0f);
         float depth_p95 = percentile(depths, 95.0f);
         float depth_p99 = percentile(depths, 99.0f);
+        far_shelf_mode_ = depth_p95 > 3000.0f;
         max_valid_depth_mm_ = std::clamp(depth_p99 + 500.0f, 2000.0f, 5000.0f);
         max_distance_ = static_cast<int>(std::clamp(depth_p95 + 300.0f, 2000.0f, 5000.0f));
 
@@ -504,14 +513,32 @@ private:
         }
         float noise_mad = percentile(deviations, 50.0f);
         motion_threshold_mm_ = std::clamp(noise_mad * 6.0f, 60.0f, DEPTH_CHANGE_THRESHOLD);
+        if (far_shelf_mode_) {
+            confidence_threshold_ = std::max(2, confidence_threshold_ - 2);
+            min_valid_pixels_per_cluster_ = 2;
+            motion_threshold_mm_ = std::min(motion_threshold_mm_, 120.0f);
+        } else {
+            min_valid_pixels_per_cluster_ = 3;
+        }
+
+        visualization_min_depth_mm_ = std::max(0.0f, depth_p50 - (far_shelf_mode_ ? 1200.0f : 900.0f));
+        visualization_max_depth_mm_ = std::min(max_valid_depth_mm_, depth_p95 + 300.0f);
+        if (visualization_max_depth_mm_ <= visualization_min_depth_mm_ + 200.0f) {
+            visualization_min_depth_mm_ = 0.0f;
+            visualization_max_depth_mm_ = static_cast<float>(max_distance_);
+        }
 
         std::cout << "\n🔧 AUTO-TUNED DETECTION PARAMETERS:" << std::endl;
+        std::cout << "   Far shelf mode: " << (far_shelf_mode_ ? "ON" : "OFF") << std::endl;
         std::cout << "   Baseline depth p50/p95/p99: " << std::fixed << std::setprecision(0)
                   << depth_p50 << "/" << depth_p95 << "/" << depth_p99 << " mm" << std::endl;
         std::cout << "   Display max distance: " << max_distance_ << " mm" << std::endl;
         std::cout << "   Valid depth max: " << max_valid_depth_mm_ << " mm" << std::endl;
         std::cout << "   Confidence threshold: " << confidence_threshold_ << std::endl;
         std::cout << "   Motion threshold: " << motion_threshold_mm_ << " mm" << std::endl;
+        std::cout << "   Min valid pixels/cluster: " << min_valid_pixels_per_cluster_ << std::endl;
+        std::cout << "   Saved depth contrast range: " << visualization_min_depth_mm_ 
+                  << " - " << visualization_max_depth_mm_ << " mm" << std::endl;
     }
     
     void detectInterference() {
@@ -522,7 +549,7 @@ private:
         // ✨ NEW: Create depth clusters (spatial noise filtering!)
         std::vector<DepthCluster> clusters = SimpleVirtualWallUtils::createDepthClusters(
             depth_frame_, confidence_frame_, baseline_depth_, config_,
-            confidence_threshold_, motion_threshold_mm_, max_valid_depth_mm_);
+            confidence_threshold_, motion_threshold_mm_, max_valid_depth_mm_, min_valid_pixels_per_cluster_);
         
         // Filter clusters that show interference
         std::vector<DepthCluster> interference_clusters;
@@ -787,7 +814,13 @@ private:
     cv::Mat createDepthVisualization(const cv::Mat& depth_frame, const cv::Mat& confidence_frame) const {
         cv::Mat depth_8bit;
         cv::Mat depth_color;
-        depth_frame.convertTo(depth_8bit, CV_8U, 255.0 / max_distance_, 0);
+        float vis_min = visualization_min_depth_mm_;
+        float vis_max = visualization_max_depth_mm_;
+        if (vis_max <= vis_min + 1.0f) {
+            vis_min = 0.0f;
+            vis_max = static_cast<float>(max_distance_);
+        }
+        depth_frame.convertTo(depth_8bit, CV_8U, 255.0 / (vis_max - vis_min), -vis_min * 255.0 / (vis_max - vis_min));
         cv::applyColorMap(depth_8bit, depth_color, cv::COLORMAP_RAINBOW);
         if (!confidence_frame.empty()) {
             depth_color.setTo(cv::Scalar(0, 0, 0), confidence_frame < confidence_threshold_);
@@ -985,6 +1018,10 @@ private:
         root["auto_tuned_parameters"]["valid_depth_max_mm"] = max_valid_depth_mm_;
         root["auto_tuned_parameters"]["confidence_threshold"] = confidence_threshold_;
         root["auto_tuned_parameters"]["motion_threshold_mm"] = motion_threshold_mm_;
+        root["auto_tuned_parameters"]["far_shelf_mode"] = far_shelf_mode_;
+        root["auto_tuned_parameters"]["min_valid_pixels_per_cluster"] = min_valid_pixels_per_cluster_;
+        root["auto_tuned_parameters"]["visualization_min_depth_mm"] = visualization_min_depth_mm_;
+        root["auto_tuned_parameters"]["visualization_max_depth_mm"] = visualization_max_depth_mm_;
         root["object_depth_stats"]["valid"] = best_object_stats_.valid;
         if (best_object_stats_.valid) {
             root["object_depth_stats"]["center_pixel"]["x"] = best_object_stats_.center_pixel.x;
