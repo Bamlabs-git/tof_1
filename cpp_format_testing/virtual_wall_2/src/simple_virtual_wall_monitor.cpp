@@ -11,6 +11,8 @@
 #include <cmath>
 #include <fstream>
 #include <condition_variable>
+#include <limits>
+#include <algorithm>
 #include "simple_virtual_wall_utils.h"
 #include "common.h"
 #include "warning_suppression.h"
@@ -71,6 +73,25 @@ private:
         cv::Mat confidence_frame;
     };
 
+    struct ObjectDepthStats {
+        bool valid;
+        cv::Point2f center_pixel;
+        cv::Point2f center_cm;
+        float average_depth_mm;
+        float min_depth_mm;
+        float max_depth_mm;
+        size_t cluster_count;
+
+        ObjectDepthStats() :
+            valid(false),
+            center_pixel(0, 0),
+            center_cm(0, 0),
+            average_depth_mm(0),
+            min_depth_mm(0),
+            max_depth_mm(0),
+            cluster_count(0) {}
+    };
+
     struct RecordingFrameJob {
         int frame_number;
         cv::Mat depth_frame;
@@ -79,6 +100,7 @@ private:
         std::filesystem::path frames_depth_raw_dir;
         std::filesystem::path frames_confidence_raw_dir;
         std::string action_id;
+        ObjectDepthStats object_stats;
         bool is_shutdown;
 
         RecordingFrameJob() : frame_number(0), is_shutdown(false) {}
@@ -124,6 +146,8 @@ private:
     // Action recording
     RecordingState recording_state_;
     ActionRecordingSession current_action_;
+    ObjectDepthStats latest_object_stats_;
+    ObjectDepthStats best_object_stats_;
     std::filesystem::path recordings_base_dir_;
     int action_counter_;
     int clear_frame_count_;
@@ -491,6 +515,10 @@ private:
             current_frame_has_interference &&
             interference_clusters.size() >= MIN_CLUSTERS_FOR_DETECTION;
 
+        if (confirmed_interference) {
+            latest_object_stats_ = computeObjectDepthStats(interference_clusters);
+        }
+
         updateActionRecording(confirmed_interference, interference_clusters);
 
         if (confirmed_interference && recording_state_ == RecordingState::RECORDING) {
@@ -500,6 +528,42 @@ private:
                       << "/3, clusters=" << interference_clusters.size() 
                       << "/" << MIN_CLUSTERS_FOR_DETECTION << std::endl;
         }
+    }
+
+    ObjectDepthStats computeObjectDepthStats(const std::vector<DepthCluster>& clusters) const {
+        ObjectDepthStats stats;
+        if (clusters.empty()) return stats;
+
+        float weighted_x = 0.0f;
+        float weighted_y = 0.0f;
+        float weighted_depth = 0.0f;
+        int total_weight = 0;
+        float min_depth = std::numeric_limits<float>::max();
+        float max_depth = 0.0f;
+
+        for (const auto& cluster : clusters) {
+            int weight = std::max(1, cluster.valid_pixel_count);
+            weighted_x += cluster.pixel_center.x * weight;
+            weighted_y += cluster.pixel_center.y * weight;
+            weighted_depth += cluster.median_depth * weight;
+            total_weight += weight;
+            min_depth = std::min(min_depth, cluster.median_depth);
+            max_depth = std::max(max_depth, cluster.median_depth);
+        }
+
+        if (total_weight <= 0) return stats;
+
+        stats.valid = true;
+        stats.center_pixel = cv::Point2f(weighted_x / total_weight, weighted_y / total_weight);
+        stats.center_cm = SimpleVirtualWallUtils::pixelToRealWorld(
+            cv::Point2i(static_cast<int>(std::round(stats.center_pixel.x)),
+                        static_cast<int>(std::round(stats.center_pixel.y))),
+            config_);
+        stats.average_depth_mm = weighted_depth / total_weight;
+        stats.min_depth_mm = min_depth;
+        stats.max_depth_mm = max_depth;
+        stats.cluster_count = clusters.size();
+        return stats;
     }
 
     void updateActionRecording(bool has_interference, const std::vector<DepthCluster>& clusters) {
@@ -531,6 +595,8 @@ private:
         }
 
         current_action_ = ActionRecordingSession();
+        latest_object_stats_ = computeObjectDepthStats(clusters);
+        best_object_stats_ = latest_object_stats_;
         current_action_.start_timestamp = SimpleVirtualWallUtils::getCurrentTimestamp();
         current_action_.start_time = std::chrono::steady_clock::now();
 
@@ -642,6 +708,11 @@ private:
         current_action_.last_position_cm = position;
         current_action_.max_penetration_mm = std::max(current_action_.max_penetration_mm, max_penetration);
         current_action_.max_cluster_count = std::max(current_action_.max_cluster_count, clusters.size());
+        latest_object_stats_ = computeObjectDepthStats(clusters);
+        if (latest_object_stats_.valid &&
+            (!best_object_stats_.valid || latest_object_stats_.cluster_count >= best_object_stats_.cluster_count)) {
+            best_object_stats_ = latest_object_stats_;
+        }
     }
 
     cv::Mat createDepthVisualization(const cv::Mat& depth_frame, const cv::Mat& confidence_frame) const {
@@ -686,6 +757,7 @@ private:
         job.frames_depth_raw_dir = current_action_.frames_depth_raw_dir;
         job.frames_confidence_raw_dir = current_action_.frames_confidence_raw_dir;
         job.action_id = current_action_.action_id;
+        job.object_stats = latest_object_stats_;
 
         {
             std::lock_guard<std::mutex> lock(recording_queue_mutex_);
@@ -730,6 +802,7 @@ private:
         name << "frame_" << std::setfill('0') << std::setw(6) << job.frame_number;
 
         cv::Mat depth_vis = createDepthVisualization(job.depth_frame, job.confidence_frame);
+        annotateDepthVisualization(depth_vis, job.object_stats);
         cv::imwrite((job.frames_depth_png_dir / (name.str() + ".png")).string(), depth_vis);
 
         cv::FileStorage depth_file((job.frames_depth_raw_dir / (name.str() + ".yml")).string(), cv::FileStorage::WRITE);
@@ -746,6 +819,27 @@ private:
         if (current_action_.action_id == job.action_id && current_action_.depth_video.isOpened()) {
             current_action_.depth_video.write(depth_vis);
         }
+    }
+
+    void annotateDepthVisualization(cv::Mat& image, const ObjectDepthStats& stats) const {
+        if (!stats.valid || image.empty()) return;
+
+        cv::Point center(
+            std::clamp(static_cast<int>(std::round(stats.center_pixel.x)), 0, image.cols - 1),
+            std::clamp(static_cast<int>(std::round(stats.center_pixel.y)), 0, image.rows - 1));
+
+        cv::circle(image, center, 3, cv::Scalar(255, 0, 0), -1);
+
+        std::ostringstream text;
+        text << std::fixed << std::setprecision(0) << stats.average_depth_mm << "mm";
+        int baseline = 0;
+        double font_scale = 0.35;
+        int thickness = 1;
+        cv::Size text_size = cv::getTextSize(text.str(), cv::FONT_HERSHEY_SIMPLEX,
+                                             font_scale, thickness, &baseline);
+        cv::Point origin(std::max(2, image.cols - text_size.width - 4), text_size.height + 4);
+        cv::putText(image, text.str(), origin, cv::FONT_HERSHEY_SIMPLEX,
+                    font_scale, cv::Scalar(255, 0, 0), thickness, cv::LINE_AA);
     }
 
     void waitForRecordingQueueToDrain() {
@@ -818,6 +912,17 @@ private:
         root["wall_height_cm"] = config_.actual_height_cm;
         root["wall_depth_mm"] = config_.wall_depth_mm;
         root["penetration_threshold_mm"] = config_.penetration_threshold_mm;
+        root["object_depth_stats"]["valid"] = best_object_stats_.valid;
+        if (best_object_stats_.valid) {
+            root["object_depth_stats"]["center_pixel"]["x"] = best_object_stats_.center_pixel.x;
+            root["object_depth_stats"]["center_pixel"]["y"] = best_object_stats_.center_pixel.y;
+            root["object_depth_stats"]["center_cm"]["x"] = best_object_stats_.center_cm.x;
+            root["object_depth_stats"]["center_cm"]["y"] = best_object_stats_.center_cm.y;
+            root["object_depth_stats"]["average_depth_mm"] = best_object_stats_.average_depth_mm;
+            root["object_depth_stats"]["min_depth_mm"] = best_object_stats_.min_depth_mm;
+            root["object_depth_stats"]["max_depth_mm"] = best_object_stats_.max_depth_mm;
+            root["object_depth_stats"]["cluster_count"] = static_cast<Json::UInt64>(best_object_stats_.cluster_count);
+        }
 
         std::ofstream file(current_action_.session_dir / "metadata.json");
         if (file.is_open()) {

@@ -219,6 +219,7 @@ cd runtime
    - Recording stops after 5 frames after the wall is clear.
    - A continuous hand presence is counted once, not repeatedly every second.
    - Frame/video saving runs on a background writer thread so detection is not blocked by disk I/O.
+   - Saved depth PNG/video frames include a small blue dot at the detected object center and a top-right average depth label.
 
    Output location:
    ```bash
@@ -246,7 +247,7 @@ cd runtime
    frames/confidence_raw/frame_000001.yml
    ```
 
-   Display frames/videos are intentionally not saved because they duplicate the depth visualization. `metadata.json` contains start/end timestamps, duration, frame count, pre-roll frame count, post-clear target, entry/last position, max penetration, max affected clusters, recorded content types, and wall configuration details.
+   Display frames/videos are intentionally not saved because they duplicate the depth visualization. `metadata.json` contains start/end timestamps, duration, frame count, pre-roll frame count, post-clear target, entry/last position, max penetration, max affected clusters, object center/depth stats, recorded content types, and wall configuration details.
 
 **Monitor UI Controls:**
 - **Q**: Quit
