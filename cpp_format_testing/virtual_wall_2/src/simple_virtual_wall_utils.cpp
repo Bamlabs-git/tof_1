@@ -666,7 +666,8 @@ float SimpleVirtualWallUtils::computeClusterMedianDepth(const cv::Mat& depth_fra
                                                        const cv::Mat& confidence_frame,
                                                        const cv::Rect& cluster_bounds,
                                                        int confidence_threshold,
-                                                       int& valid_pixel_count) {
+                                                       int& valid_pixel_count,
+                                                       float max_valid_depth_mm) {
     std::vector<float> valid_depths;
     valid_pixel_count = 0;
     
@@ -679,7 +680,7 @@ float SimpleVirtualWallUtils::computeClusterMedianDepth(const cv::Mat& depth_fra
             if (confidence < confidence_threshold) continue;
             
             float depth = depth_frame.at<float>(y, x);
-            if (depth > 100 && depth < 3500) {  // Valid ToF range (lower min for close shelves)
+            if (depth > 100 && depth < max_valid_depth_mm) {  // Valid ToF range (dynamic for lower shelves)
                 valid_depths.push_back(depth);
                 valid_pixel_count++;
             }
@@ -744,7 +745,8 @@ std::vector<DepthCluster> SimpleVirtualWallUtils::createDepthClusters(
     const cv::Mat& baseline_depth,
     const SimpleVirtualWallConfig& config,
     int confidence_threshold,
-    float motion_threshold_mm) {
+    float motion_threshold_mm,
+    float max_valid_depth_mm) {
     
     std::vector<DepthCluster> clusters;
     
@@ -768,7 +770,7 @@ std::vector<DepthCluster> SimpleVirtualWallUtils::createDepthClusters(
             // Compute median depth for current frame
             cluster.median_depth = computeClusterMedianDepth(
                 depth_frame, confidence_frame, cluster.bounds, 
-                confidence_threshold, cluster.valid_pixel_count);
+                confidence_threshold, cluster.valid_pixel_count, max_valid_depth_mm);
             
             if (cluster.median_depth == 0 || cluster.valid_pixel_count < 3) {
                 continue; // Skip clusters with insufficient data
@@ -779,7 +781,7 @@ std::vector<DepthCluster> SimpleVirtualWallUtils::createDepthClusters(
                 int baseline_valid_count = 0;
                 cluster.baseline_median = computeClusterMedianDepth(
                     baseline_depth, confidence_frame, cluster.bounds,
-                    confidence_threshold, baseline_valid_count);
+                    confidence_threshold, baseline_valid_count, max_valid_depth_mm);
                 
                 // Check for motion (baseline - current > threshold)
                 float depth_change = cluster.baseline_median - cluster.median_depth;
@@ -814,4 +816,3 @@ float SimpleVirtualWallUtils::clamp(float value, float min, float max) {
     if (value > max) return max;
     return value;
 }
-

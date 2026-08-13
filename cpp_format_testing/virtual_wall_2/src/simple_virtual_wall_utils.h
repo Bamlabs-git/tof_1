@@ -243,7 +243,8 @@ public:
                                           const cv::Mat& confidence_frame,
                                           const cv::Rect& cluster_bounds,
                                           int confidence_threshold,
-                                          int& valid_pixel_count);
+                                          int& valid_pixel_count,
+                                          float max_valid_depth_mm = 3500.0f);
     
     // Get cluster median depth at a specific position (for corner selection)
     static float getClusterMedianAtPosition(const cv::Mat& depth_frame,
@@ -259,7 +260,8 @@ public:
                                                          const cv::Mat& baseline_depth,
                                                          const SimpleVirtualWallConfig& config,
                                                          int confidence_threshold,
-                                                         float motion_threshold_mm);
+                                                         float motion_threshold_mm,
+                                                         float max_valid_depth_mm = 3500.0f);
     
     // ===========================================================================================
     // VISUALIZATION

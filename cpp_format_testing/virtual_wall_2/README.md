@@ -249,6 +249,12 @@ cd runtime
 
    Display frames/videos are intentionally not saved because they duplicate the depth visualization. `metadata.json` contains start/end timestamps, duration, frame count, pre-roll frame count, post-clear target, entry/last position, max penetration, max affected clusters, object center/depth stats, recorded content types, and wall configuration details.
 
+6. **Automatic lower-shelf tuning:**
+   - After baseline calibration, the monitor analyzes valid depth/confidence values inside the wall.
+   - It auto-selects display max distance, valid depth max, confidence threshold, and motion threshold.
+   - This helps shelves farther from the camera by avoiding fixed `3500mm` and fixed confidence assumptions.
+   - Selected values are printed to the console and saved under `metadata.json` as `auto_tuned_parameters`.
+
 **Monitor UI Controls:**
 - **Q**: Quit
 - **R**: Reload configuration

@@ -125,6 +125,8 @@ private:
     // Detection parameters
     int confidence_threshold_;
     int max_distance_;
+    float max_valid_depth_mm_;
+    float motion_threshold_mm_;
     
     // Temporal filtering
     static const int TEMPORAL_FILTER_FRAMES = 3;
@@ -182,6 +184,8 @@ public:
         interference_count_(0),
         confidence_threshold_(15),  // Lower threshold for steep angles (lower shelf)
         max_distance_(3500),
+        max_valid_depth_mm_(3500.0f),
+        motion_threshold_mm_(DEPTH_CHANGE_THRESHOLD),
         recent_detections_(TEMPORAL_FILTER_FRAMES, false),
         temporal_filter_index_(0),
         recording_state_(RecordingState::IDLE),
@@ -421,7 +425,7 @@ private:
                 float depth = depth_frame_.at<float>(y, x);
                 float confidence = confidence_frame_.at<float>(y, x);
                 
-                if (confidence >= confidence_threshold_ && depth > 100 && depth < 3500) {  // Lower min for close shelves
+                if (confidence >= 1 && depth > 100 && depth < 5000) {
                     baseline_depth_.at<float>(y, x) += depth;
                     baseline_valid_.at<uchar>(y, x)++;
                 }
@@ -440,9 +444,74 @@ private:
                 }
             }
             baseline_established_ = true;
+            autoTuneDetectionParameters();
             std::cout << "✅ Baseline established! Now monitoring for changes..." << std::endl;
             last_event_time_ = std::chrono::steady_clock::now();
         }
+    }
+
+    float percentile(std::vector<float>& values, float p) const {
+        if (values.empty()) return 0.0f;
+        std::sort(values.begin(), values.end());
+        size_t index = static_cast<size_t>(std::round((p / 100.0f) * (values.size() - 1)));
+        index = std::min(index, values.size() - 1);
+        return values[index];
+    }
+
+    void autoTuneDetectionParameters() {
+        std::vector<float> depths;
+        std::vector<float> confidences;
+
+        for (int y = 0; y < baseline_depth_.rows; y++) {
+            for (int x = 0; x < baseline_depth_.cols; x++) {
+                cv::Point2i pixel(x, y);
+                if (!SimpleVirtualWallUtils::isPointInsideBoundary(pixel, config_)) continue;
+
+                float depth = baseline_depth_.at<float>(y, x);
+                if (depth > 100 && depth < 5000) {
+                    depths.push_back(depth);
+                }
+
+                if (!confidence_frame_.empty()) {
+                    float confidence = confidence_frame_.at<float>(y, x);
+                    if (confidence > 0 && confidence < 5000) {
+                        confidences.push_back(confidence);
+                    }
+                }
+            }
+        }
+
+        if (depths.empty()) {
+            std::cout << "⚠️  Auto-tune skipped: no valid baseline depths inside wall" << std::endl;
+            return;
+        }
+
+        float depth_p50 = percentile(depths, 50.0f);
+        float depth_p95 = percentile(depths, 95.0f);
+        float depth_p99 = percentile(depths, 99.0f);
+        max_valid_depth_mm_ = std::clamp(depth_p99 + 500.0f, 2000.0f, 5000.0f);
+        max_distance_ = static_cast<int>(std::clamp(depth_p95 + 300.0f, 2000.0f, 5000.0f));
+
+        if (!confidences.empty()) {
+            float confidence_p20 = percentile(confidences, 20.0f);
+            confidence_threshold_ = static_cast<int>(std::clamp(confidence_p20 * 0.6f, 3.0f, 20.0f));
+        }
+
+        std::vector<float> deviations;
+        deviations.reserve(depths.size());
+        for (float depth : depths) {
+            deviations.push_back(std::abs(depth - depth_p50));
+        }
+        float noise_mad = percentile(deviations, 50.0f);
+        motion_threshold_mm_ = std::clamp(noise_mad * 6.0f, 60.0f, DEPTH_CHANGE_THRESHOLD);
+
+        std::cout << "\n🔧 AUTO-TUNED DETECTION PARAMETERS:" << std::endl;
+        std::cout << "   Baseline depth p50/p95/p99: " << std::fixed << std::setprecision(0)
+                  << depth_p50 << "/" << depth_p95 << "/" << depth_p99 << " mm" << std::endl;
+        std::cout << "   Display max distance: " << max_distance_ << " mm" << std::endl;
+        std::cout << "   Valid depth max: " << max_valid_depth_mm_ << " mm" << std::endl;
+        std::cout << "   Confidence threshold: " << confidence_threshold_ << std::endl;
+        std::cout << "   Motion threshold: " << motion_threshold_mm_ << " mm" << std::endl;
     }
     
     void detectInterference() {
@@ -453,7 +522,7 @@ private:
         // ✨ NEW: Create depth clusters (spatial noise filtering!)
         std::vector<DepthCluster> clusters = SimpleVirtualWallUtils::createDepthClusters(
             depth_frame_, confidence_frame_, baseline_depth_, config_,
-            confidence_threshold_, DEPTH_CHANGE_THRESHOLD);
+            confidence_threshold_, motion_threshold_mm_, max_valid_depth_mm_);
         
         // Filter clusters that show interference
         std::vector<DepthCluster> interference_clusters;
@@ -912,6 +981,10 @@ private:
         root["wall_height_cm"] = config_.actual_height_cm;
         root["wall_depth_mm"] = config_.wall_depth_mm;
         root["penetration_threshold_mm"] = config_.penetration_threshold_mm;
+        root["auto_tuned_parameters"]["display_max_distance_mm"] = max_distance_;
+        root["auto_tuned_parameters"]["valid_depth_max_mm"] = max_valid_depth_mm_;
+        root["auto_tuned_parameters"]["confidence_threshold"] = confidence_threshold_;
+        root["auto_tuned_parameters"]["motion_threshold_mm"] = motion_threshold_mm_;
         root["object_depth_stats"]["valid"] = best_object_stats_.valid;
         if (best_object_stats_.valid) {
             root["object_depth_stats"]["center_pixel"]["x"] = best_object_stats_.center_pixel.x;
