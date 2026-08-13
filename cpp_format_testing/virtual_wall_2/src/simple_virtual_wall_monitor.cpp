@@ -40,18 +40,17 @@ private:
         std::string start_timestamp;
         std::string end_timestamp;
         std::filesystem::path session_dir;
-        std::filesystem::path frames_display_dir;
         std::filesystem::path frames_depth_png_dir;
         std::filesystem::path frames_depth_raw_dir;
         std::filesystem::path frames_confidence_raw_dir;
         std::filesystem::path video_dir;
-        cv::VideoWriter display_video;
         cv::VideoWriter depth_video;
         cv::Point2f entry_position_cm;
         cv::Point2f last_position_cm;
         float max_penetration_mm;
         size_t max_cluster_count;
         int frame_count;
+        int pre_roll_frame_count;
         std::chrono::steady_clock::time_point start_time;
 
         ActionRecordingSession() :
@@ -60,7 +59,13 @@ private:
             last_position_cm(0, 0),
             max_penetration_mm(0),
             max_cluster_count(0),
-            frame_count(0) {}
+            frame_count(0),
+            pre_roll_frame_count(0) {}
+    };
+
+    struct BufferedRecordingFrame {
+        cv::Mat depth_frame;
+        cv::Mat confidence_frame;
     };
 
     std::unique_ptr<CameraManager> camera_manager_;
@@ -106,8 +111,10 @@ private:
     std::filesystem::path recordings_base_dir_;
     int action_counter_;
     int clear_frame_count_;
+    std::deque<BufferedRecordingFrame> pre_roll_buffer_;
     static constexpr int START_CONFIRM_FRAMES = 2;
-    static constexpr int CLEAR_CONFIRM_FRAMES = 8;
+    static constexpr int PRE_ROLL_FRAMES = 60; // ~2 seconds at 30 FPS
+    static constexpr int CLEAR_CONFIRM_FRAMES = 30; // ~1 second at 30 FPS
     static constexpr int MAX_ACTION_FRAMES = 450; // Safety cap: ~15 seconds at 30 FPS
     static constexpr double RECORDING_FPS = 30.0;
     
@@ -323,6 +330,23 @@ private:
         if (!confidence_frame_.empty()) {
             display_frame_.setTo(cv::Scalar(0, 0, 0), confidence_frame_ < confidence_threshold_);
         }
+
+        updatePreRollBuffer();
+    }
+
+    void updatePreRollBuffer() {
+        if (depth_frame_.empty()) return;
+
+        BufferedRecordingFrame frame;
+        frame.depth_frame = depth_frame_.clone();
+        if (!confidence_frame_.empty()) {
+            frame.confidence_frame = confidence_frame_.clone();
+        }
+
+        pre_roll_buffer_.push_back(frame);
+        while (pre_roll_buffer_.size() > PRE_ROLL_FRAMES) {
+            pre_roll_buffer_.pop_front();
+        }
     }
     
     void establishBaseline() {
@@ -496,19 +520,18 @@ private:
         current_action_.action_id = buildActionId(action_counter_);
 
         current_action_.session_dir = day_dir / current_action_.action_id;
-        current_action_.frames_display_dir = current_action_.session_dir / "frames" / "display_png";
         current_action_.frames_depth_png_dir = current_action_.session_dir / "frames" / "depth_png";
         current_action_.frames_depth_raw_dir = current_action_.session_dir / "frames" / "depth_raw";
         current_action_.frames_confidence_raw_dir = current_action_.session_dir / "frames" / "confidence_raw";
         current_action_.video_dir = current_action_.session_dir / "video";
 
-        std::filesystem::create_directories(current_action_.frames_display_dir);
         std::filesystem::create_directories(current_action_.frames_depth_png_dir);
         std::filesystem::create_directories(current_action_.frames_depth_raw_dir);
         std::filesystem::create_directories(current_action_.frames_confidence_raw_dir);
         std::filesystem::create_directories(current_action_.video_dir);
 
         initializeActionVideos();
+        writePreRollFrames();
         updateCurrentActionStats(clusters);
         logInterferenceEventFromClusters(clusters);
 
@@ -561,13 +584,11 @@ private:
     void initializeActionVideos() {
         cv::Size frame_size(depth_frame_.cols, depth_frame_.rows);
         int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
-        std::string display_video_path = (current_action_.video_dir / (current_action_.action_id + "_display.mp4")).string();
         std::string depth_video_path = (current_action_.video_dir / (current_action_.action_id + "_depth.mp4")).string();
 
-        current_action_.display_video.open(display_video_path, fourcc, RECORDING_FPS, frame_size, true);
         current_action_.depth_video.open(depth_video_path, fourcc, RECORDING_FPS, frame_size, true);
 
-        if (!current_action_.display_video.isOpened() || !current_action_.depth_video.isOpened()) {
+        if (!current_action_.depth_video.isOpened()) {
             std::cout << "⚠️  Video writer could not open MP4 output; frame files will still be saved" << std::endl;
         }
     }
@@ -596,41 +617,52 @@ private:
         current_action_.max_cluster_count = std::max(current_action_.max_cluster_count, clusters.size());
     }
 
-    cv::Mat createDepthVisualization() const {
+    cv::Mat createDepthVisualization(const cv::Mat& depth_frame, const cv::Mat& confidence_frame) const {
         cv::Mat depth_8bit;
         cv::Mat depth_color;
-        depth_frame_.convertTo(depth_8bit, CV_8U, 255.0 / max_distance_, 0);
+        depth_frame.convertTo(depth_8bit, CV_8U, 255.0 / max_distance_, 0);
         cv::applyColorMap(depth_8bit, depth_color, cv::COLORMAP_RAINBOW);
-        if (!confidence_frame_.empty()) {
-            depth_color.setTo(cv::Scalar(0, 0, 0), confidence_frame_ < confidence_threshold_);
+        if (!confidence_frame.empty()) {
+            depth_color.setTo(cv::Scalar(0, 0, 0), confidence_frame < confidence_threshold_);
         }
         return depth_color;
     }
 
+    cv::Mat createDepthVisualization() const {
+        return createDepthVisualization(depth_frame_, confidence_frame_);
+    }
+
+    void writePreRollFrames() {
+        current_action_.pre_roll_frame_count = static_cast<int>(pre_roll_buffer_.size());
+        for (const auto& frame : pre_roll_buffer_) {
+            writeRecordingFrame(frame.depth_frame, frame.confidence_frame);
+        }
+    }
+
     void recordActionFrame() {
-        if (depth_frame_.empty() || display_frame_.empty()) return;
+        writeRecordingFrame(depth_frame_, confidence_frame_);
+    }
+
+    void writeRecordingFrame(const cv::Mat& depth_frame, const cv::Mat& confidence_frame) {
+        if (depth_frame.empty()) return;
 
         int frame_number = current_action_.frame_count + 1;
         std::ostringstream name;
         name << "frame_" << std::setfill('0') << std::setw(6) << frame_number;
 
-        cv::Mat depth_vis = createDepthVisualization();
-        cv::imwrite((current_action_.frames_display_dir / (name.str() + ".png")).string(), display_frame_);
+        cv::Mat depth_vis = createDepthVisualization(depth_frame, confidence_frame);
         cv::imwrite((current_action_.frames_depth_png_dir / (name.str() + ".png")).string(), depth_vis);
 
         cv::FileStorage depth_file((current_action_.frames_depth_raw_dir / (name.str() + ".yml")).string(), cv::FileStorage::WRITE);
-        depth_file << "depth_mm" << depth_frame_;
+        depth_file << "depth_mm" << depth_frame;
         depth_file.release();
 
-        if (!confidence_frame_.empty()) {
+        if (!confidence_frame.empty()) {
             cv::FileStorage confidence_file((current_action_.frames_confidence_raw_dir / (name.str() + ".yml")).string(), cv::FileStorage::WRITE);
-            confidence_file << "confidence" << confidence_frame_;
+            confidence_file << "confidence" << confidence_frame;
             confidence_file.release();
         }
 
-        if (current_action_.display_video.isOpened()) {
-            current_action_.display_video.write(display_frame_);
-        }
         if (current_action_.depth_video.isOpened()) {
             current_action_.depth_video.write(depth_vis);
         }
@@ -642,7 +674,6 @@ private:
         if (recording_state_ == RecordingState::IDLE) return;
 
         current_action_.end_timestamp = SimpleVirtualWallUtils::getCurrentTimestamp();
-        if (current_action_.display_video.isOpened()) current_action_.display_video.release();
         if (current_action_.depth_video.isOpened()) current_action_.depth_video.release();
         saveActionMetadata();
 
@@ -665,7 +696,15 @@ private:
         root["end_timestamp"] = current_action_.end_timestamp;
         root["duration_ms"] = static_cast<Json::Int64>(duration_ms);
         root["frame_count"] = current_action_.frame_count;
+        root["pre_roll_frames"] = current_action_.pre_roll_frame_count;
+        root["pre_roll_seconds_target"] = PRE_ROLL_FRAMES / RECORDING_FPS;
+        root["post_clear_frames_target"] = CLEAR_CONFIRM_FRAMES;
+        root["post_clear_seconds_target"] = CLEAR_CONFIRM_FRAMES / RECORDING_FPS;
         root["fps_target"] = RECORDING_FPS;
+        root["recorded_content"].append("depth_png");
+        root["recorded_content"].append("depth_raw");
+        root["recorded_content"].append("confidence_raw");
+        root["recorded_content"].append("depth_video");
         root["entry_position_cm"]["x"] = current_action_.entry_position_cm.x;
         root["entry_position_cm"]["y"] = current_action_.entry_position_cm.y;
         root["last_position_cm"]["x"] = current_action_.last_position_cm.x;

@@ -214,8 +214,9 @@ cd runtime
 
 5. **Automatic action recording:**
    - When interference is confirmed, the monitor creates one action folder.
+   - Recording includes about 2 seconds before the confirmed interference.
    - Recording continues while the hand/object remains inside the wall.
-   - Recording stops after the wall is clear for several frames.
+   - Recording stops after the wall is clear for about 1 second.
    - A continuous hand presence is counted once, not repeatedly every second.
 
    Output location:
@@ -238,15 +239,13 @@ cd runtime
    Folder contents:
    ```text
    metadata.json
-   video/*_display.mp4
    video/*_depth.mp4
-   frames/display_png/frame_000001.png
    frames/depth_png/frame_000001.png
    frames/depth_raw/frame_000001.yml
    frames/confidence_raw/frame_000001.yml
    ```
 
-   `metadata.json` contains start/end timestamps, duration, frame count, entry/last position, max penetration, max affected clusters, and wall configuration details.
+   Display frames/videos are intentionally not saved because they duplicate the depth visualization. `metadata.json` contains start/end timestamps, duration, frame count, pre-roll frame count, post-clear target, entry/last position, max penetration, max affected clusters, recorded content types, and wall configuration details.
 
 **Monitor UI Controls:**
 - **Q**: Quit
