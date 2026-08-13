@@ -37,6 +37,12 @@ private:
         ENDING
     };
 
+    enum class RecordingFramePhase {
+        BEFORE,
+        DURING,
+        AFTER
+    };
+
     struct ActionRecordingSession {
         std::string action_id;
         std::string label;
@@ -94,6 +100,7 @@ private:
 
     struct RecordingFrameJob {
         int frame_number;
+        RecordingFramePhase phase;
         cv::Mat depth_frame;
         cv::Mat confidence_frame;
         std::filesystem::path frames_depth_png_dir;
@@ -103,7 +110,7 @@ private:
         ObjectDepthStats object_stats;
         bool is_shutdown;
 
-        RecordingFrameJob() : frame_number(0), is_shutdown(false) {}
+        RecordingFrameJob() : frame_number(0), phase(RecordingFramePhase::DURING), is_shutdown(false) {}
     };
 
     std::unique_ptr<CameraManager> camera_manager_;
@@ -846,22 +853,26 @@ private:
     void writePreRollFrames() {
         current_action_.pre_roll_frame_count = static_cast<int>(pre_roll_buffer_.size());
         for (const auto& frame : pre_roll_buffer_) {
-            enqueueRecordingFrame(frame.depth_frame, frame.confidence_frame);
+            enqueueRecordingFrame(frame.depth_frame, frame.confidence_frame, RecordingFramePhase::BEFORE);
         }
     }
 
     void recordActionFrame() {
+        RecordingFramePhase phase = RecordingFramePhase::DURING;
         if (recording_state_ == RecordingState::ENDING) {
             current_action_.post_roll_frame_count++;
+            phase = RecordingFramePhase::AFTER;
         }
-        enqueueRecordingFrame(depth_frame_, confidence_frame_);
+        enqueueRecordingFrame(depth_frame_, confidence_frame_, phase);
     }
 
-    void enqueueRecordingFrame(const cv::Mat& depth_frame, const cv::Mat& confidence_frame) {
+    void enqueueRecordingFrame(const cv::Mat& depth_frame, const cv::Mat& confidence_frame,
+                               RecordingFramePhase phase) {
         if (depth_frame.empty()) return;
 
         RecordingFrameJob job;
         job.frame_number = current_action_.frame_count + 1;
+        job.phase = phase;
         job.depth_frame = depth_frame.clone();
         if (!confidence_frame.empty()) {
             job.confidence_frame = confidence_frame.clone();
@@ -912,7 +923,12 @@ private:
 
     void writeRecordingFrameJob(const RecordingFrameJob& job) {
         std::ostringstream name;
-        name << "frame_" << std::setfill('0') << std::setw(6) << job.frame_number;
+        name << "frame_" << job.frame_number;
+        if (job.phase == RecordingFramePhase::BEFORE) {
+            name << "_before";
+        } else if (job.phase == RecordingFramePhase::AFTER) {
+            name << "_after";
+        }
 
         cv::Mat depth_vis = createDepthVisualization(job.depth_frame, job.confidence_frame);
         annotateDepthVisualization(depth_vis, job.object_stats);
@@ -995,6 +1011,12 @@ private:
     void saveActionMetadata() {
         auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - current_action_.start_time).count();
+        int during_frame_count = std::max(0, current_action_.frame_count -
+            current_action_.pre_roll_frame_count - current_action_.post_roll_frame_count);
+        int before_end = current_action_.pre_roll_frame_count;
+        int during_start = before_end + 1;
+        int during_end = before_end + during_frame_count;
+        int after_start = during_end + 1;
 
         Json::Value root;
         root["action_id"] = current_action_.action_id;
@@ -1009,6 +1031,21 @@ private:
         root["post_roll_frames"] = current_action_.post_roll_frame_count;
         root["post_roll_frames_target"] = POST_ROLL_FRAMES;
         root["post_roll_seconds_target"] = POST_ROLL_FRAMES / RECORDING_FPS;
+        root["frame_phases"]["before_count"] = current_action_.pre_roll_frame_count;
+        root["frame_phases"]["during_count"] = during_frame_count;
+        root["frame_phases"]["after_count"] = current_action_.post_roll_frame_count;
+        if (current_action_.pre_roll_frame_count > 0) {
+            root["frame_phases"]["before_range"].append(1);
+            root["frame_phases"]["before_range"].append(before_end);
+        }
+        if (during_frame_count > 0) {
+            root["frame_phases"]["during_range"].append(during_start);
+            root["frame_phases"]["during_range"].append(during_end);
+        }
+        if (current_action_.post_roll_frame_count > 0) {
+            root["frame_phases"]["after_range"].append(after_start);
+            root["frame_phases"]["after_range"].append(current_action_.frame_count);
+        }
         root["fps_target"] = RECORDING_FPS;
         root["recorded_content"].append("depth_png");
         root["recorded_content"].append("depth_raw");

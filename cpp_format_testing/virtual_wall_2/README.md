@@ -242,12 +242,18 @@ cd runtime
    ```text
    metadata.json
    video/*_depth.mp4
-   frames/depth_png/frame_000001.png
-   frames/depth_raw/frame_000001.yml
-   frames/confidence_raw/frame_000001.yml
+   frames/depth_png/frame_1_before.png
+   frames/depth_png/frame_6.png
+   frames/depth_png/frame_50_after.png
+   frames/depth_raw/frame_1_before.yml
+   frames/depth_raw/frame_6.yml
+   frames/depth_raw/frame_50_after.yml
+   frames/confidence_raw/frame_1_before.yml
+   frames/confidence_raw/frame_6.yml
+   frames/confidence_raw/frame_50_after.yml
    ```
 
-   Display frames/videos are intentionally not saved because they duplicate the depth visualization. `metadata.json` contains start/end timestamps, duration, frame count, pre-roll frame count, post-clear target, entry/last position, max penetration, max affected clusters, object center/depth stats, recorded content types, and wall configuration details.
+   Before-action frames use `_before`, active-action frames have no suffix, and post-action frames use `_after`. Numbering remains continuous across the action. Display frames/videos are intentionally not saved because they duplicate the depth visualization. `metadata.json` contains phase counts/ranges, timestamps, duration, object center/depth stats, and wall configuration details.
 
 6. **Automatic lower-shelf tuning:**
    - After baseline calibration, the monitor analyzes valid depth/confidence values inside the wall.
