@@ -358,6 +358,17 @@ bool SimpleVirtualWallUtils::isPointInsideBoundary(const cv::Point2i& pixel,
     return result >= 0;  // Inside or on boundary
 }
 
+bool SimpleVirtualWallUtils::isPointInsideTrackingBoundary(const cv::Point2i& pixel,
+                                                          const SimpleVirtualWallConfig& config) {
+    int left_x = std::min(config.lower_left_px.x, config.upper_left_px.x);
+    int right_x = std::max(config.lower_right_px.x, config.upper_right_px.x);
+    int top_y = std::min({config.lower_left_px.y, config.lower_right_px.y,
+                          config.upper_left_px.y, config.upper_right_px.y});
+
+    return pixel.x >= left_x && pixel.x <= right_x &&
+           pixel.y >= top_y && pixel.y < FRAME_HEIGHT;
+}
+
 bool SimpleVirtualWallUtils::isPointPenetrating(const cv::Point2i& pixel, float depth_mm, 
                                                const SimpleVirtualWallConfig& config) {
     /*
@@ -765,9 +776,9 @@ std::vector<DepthCluster> SimpleVirtualWallUtils::createDepthClusters(
             cluster.bounds = cv::Rect(px, py, CLUSTER_SIZE, CLUSTER_SIZE);
             cluster.pixel_center = cv::Point2i(px + CLUSTER_SIZE/2, py + CLUSTER_SIZE/2);
             
-            // Check if cluster is inside virtual wall boundary
-            if (!isPointInsideBoundary(cluster.pixel_center, config)) {
-                continue; // Skip clusters outside the wall
+            // Check if cluster is inside the extended tracking boundary
+            if (!isPointInsideTrackingBoundary(cluster.pixel_center, config)) {
+                continue; // Skip clusters outside the shelf tracking region
             }
             
             // Compute median depth for current frame
@@ -788,7 +799,7 @@ std::vector<DepthCluster> SimpleVirtualWallUtils::createDepthClusters(
                     for (int x = cluster.bounds.x; x < cluster.bounds.x + cluster.bounds.width; ++x) {
                         if (y >= depth_frame.rows || x >= depth_frame.cols) continue;
                         cv::Point2i pixel(x, y);
-                        if (!isPointInsideBoundary(pixel, config)) continue;
+                        if (!isPointInsideTrackingBoundary(pixel, config)) continue;
 
                         float confidence = confidence_frame.at<float>(y, x);
                         if (confidence < confidence_threshold) continue;

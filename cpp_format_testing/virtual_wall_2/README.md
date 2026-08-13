@@ -255,6 +255,7 @@ cd runtime
    - This helps shelves farther from the camera by avoiding fixed `3500mm` and fixed confidence assumptions.
    - Far shelf mode lowers the minimum valid pixels per cluster and applies wall-centered depth contrast for clearer saved depth images.
    - Far shelf mode also counts individual penetrating pixels inside each cluster, so thin/far hands can be detected even when the full 10x10 cluster median remains background.
+   - The calibrated wall remains the entry band, while detection candidates are tracked in an extended region below the wall band down to the bottom of the frame.
    - Selected values are printed to the console and saved under `metadata.json` as `auto_tuned_parameters`.
 
 **Monitor UI Controls:**

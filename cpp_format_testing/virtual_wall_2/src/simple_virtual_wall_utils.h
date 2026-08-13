@@ -220,6 +220,10 @@ public:
     // Check if a point is inside the virtual wall boundary
     static bool isPointInsideBoundary(const cv::Point2i& pixel, 
                                      const SimpleVirtualWallConfig& config);
+
+    // Extended tracking region below the calibrated wall band for downward-facing shelf setups.
+    static bool isPointInsideTrackingBoundary(const cv::Point2i& pixel,
+                                             const SimpleVirtualWallConfig& config);
     
     // Check if a point is penetrating the virtual wall (closer than wall depth)
     static bool isPointPenetrating(const cv::Point2i& pixel, float depth_mm, 

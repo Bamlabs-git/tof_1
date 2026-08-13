@@ -475,7 +475,7 @@ private:
         for (int y = 0; y < baseline_depth_.rows; y++) {
             for (int x = 0; x < baseline_depth_.cols; x++) {
                 cv::Point2i pixel(x, y);
-                if (!SimpleVirtualWallUtils::isPointInsideBoundary(pixel, config_)) continue;
+                if (!SimpleVirtualWallUtils::isPointInsideTrackingBoundary(pixel, config_)) continue;
 
                 float depth = baseline_depth_.at<float>(y, x);
                 if (depth > 100 && depth < 5000) {
