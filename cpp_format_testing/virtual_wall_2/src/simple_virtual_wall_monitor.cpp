@@ -128,6 +128,7 @@ private:
     float max_valid_depth_mm_;
     float motion_threshold_mm_;
     int min_valid_pixels_per_cluster_;
+    int min_interference_pixels_per_cluster_;
     bool far_shelf_mode_;
     float visualization_min_depth_mm_;
     float visualization_max_depth_mm_;
@@ -191,6 +192,7 @@ public:
         max_valid_depth_mm_(3500.0f),
         motion_threshold_mm_(DEPTH_CHANGE_THRESHOLD),
         min_valid_pixels_per_cluster_(3),
+        min_interference_pixels_per_cluster_(2),
         far_shelf_mode_(false),
         visualization_min_depth_mm_(0.0f),
         visualization_max_depth_mm_(3500.0f),
@@ -516,9 +518,11 @@ private:
         if (far_shelf_mode_) {
             confidence_threshold_ = std::max(2, confidence_threshold_ - 2);
             min_valid_pixels_per_cluster_ = 2;
+            min_interference_pixels_per_cluster_ = 2;
             motion_threshold_mm_ = std::min(motion_threshold_mm_, 120.0f);
         } else {
             min_valid_pixels_per_cluster_ = 3;
+            min_interference_pixels_per_cluster_ = 3;
         }
 
         visualization_min_depth_mm_ = std::max(0.0f, depth_p50 - (far_shelf_mode_ ? 1200.0f : 900.0f));
@@ -537,6 +541,7 @@ private:
         std::cout << "   Confidence threshold: " << confidence_threshold_ << std::endl;
         std::cout << "   Motion threshold: " << motion_threshold_mm_ << " mm" << std::endl;
         std::cout << "   Min valid pixels/cluster: " << min_valid_pixels_per_cluster_ << std::endl;
+        std::cout << "   Min interference pixels/cluster: " << min_interference_pixels_per_cluster_ << std::endl;
         std::cout << "   Saved depth contrast range: " << visualization_min_depth_mm_ 
                   << " - " << visualization_max_depth_mm_ << " mm" << std::endl;
     }
@@ -549,7 +554,8 @@ private:
         // ✨ NEW: Create depth clusters (spatial noise filtering!)
         std::vector<DepthCluster> clusters = SimpleVirtualWallUtils::createDepthClusters(
             depth_frame_, confidence_frame_, baseline_depth_, config_,
-            confidence_threshold_, motion_threshold_mm_, max_valid_depth_mm_, min_valid_pixels_per_cluster_);
+            confidence_threshold_, motion_threshold_mm_, max_valid_depth_mm_,
+            min_valid_pixels_per_cluster_, far_shelf_mode_, min_interference_pixels_per_cluster_);
         
         // Filter clusters that show interference
         std::vector<DepthCluster> interference_clusters;
@@ -574,12 +580,14 @@ private:
         if (debug_mode_ && !clusters.empty()) {
             int motion_clusters = 0;
             int penetrating_clusters = 0;
+            int far_pixel_hits = 0;
             float max_change = 0;
             const DepthCluster* max_cluster = nullptr;
             
             for (const auto& c : clusters) {
                 if (c.has_motion) motion_clusters++;
                 if (c.penetrates_wall) penetrating_clusters++;
+                far_pixel_hits += c.interference_pixel_count;
                 
                 float change = c.baseline_median - c.median_depth;
                 if (change > max_change) {
@@ -594,6 +602,7 @@ private:
                 std::cout << "   Motion clusters: " << motion_clusters << std::endl;
                 std::cout << "   Penetrating clusters: " << penetrating_clusters << std::endl;
                 std::cout << "   Interference clusters: " << interference_clusters.size() << std::endl;
+                std::cout << "   Far pixel hits: " << far_pixel_hits << std::endl;
                 std::cout << "   Temporal filter: " << detection_count << "/3 frames" << std::endl;
                 
                 if (max_cluster) {
@@ -638,7 +647,9 @@ private:
         float max_depth = 0.0f;
 
         for (const auto& cluster : clusters) {
-            int weight = std::max(1, cluster.valid_pixel_count);
+            int weight = std::max(1, cluster.interference_pixel_count > 0
+                ? cluster.interference_pixel_count
+                : cluster.valid_pixel_count);
             weighted_x += cluster.pixel_center.x * weight;
             weighted_y += cluster.pixel_center.y * weight;
             weighted_depth += cluster.median_depth * weight;
@@ -1020,6 +1031,7 @@ private:
         root["auto_tuned_parameters"]["motion_threshold_mm"] = motion_threshold_mm_;
         root["auto_tuned_parameters"]["far_shelf_mode"] = far_shelf_mode_;
         root["auto_tuned_parameters"]["min_valid_pixels_per_cluster"] = min_valid_pixels_per_cluster_;
+        root["auto_tuned_parameters"]["min_interference_pixels_per_cluster"] = min_interference_pixels_per_cluster_;
         root["auto_tuned_parameters"]["visualization_min_depth_mm"] = visualization_min_depth_mm_;
         root["auto_tuned_parameters"]["visualization_max_depth_mm"] = visualization_max_depth_mm_;
         root["object_depth_stats"]["valid"] = best_object_stats_.valid;

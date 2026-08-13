@@ -747,7 +747,9 @@ std::vector<DepthCluster> SimpleVirtualWallUtils::createDepthClusters(
     int confidence_threshold,
     float motion_threshold_mm,
     float max_valid_depth_mm,
-    int min_valid_pixels) {
+    int min_valid_pixels,
+    bool far_object_mode,
+    int min_interference_pixels) {
     
     std::vector<DepthCluster> clusters;
     
@@ -776,9 +778,55 @@ std::vector<DepthCluster> SimpleVirtualWallUtils::createDepthClusters(
             if (cluster.median_depth == 0 || cluster.valid_pixel_count < min_valid_pixels) {
                 continue; // Skip clusters with insufficient data
             }
-            
+
+            if (far_object_mode && !baseline_depth.empty()) {
+                float hit_depth_sum = 0.0f;
+                float hit_x_sum = 0.0f;
+                float hit_y_sum = 0.0f;
+
+                for (int y = cluster.bounds.y; y < cluster.bounds.y + cluster.bounds.height; ++y) {
+                    for (int x = cluster.bounds.x; x < cluster.bounds.x + cluster.bounds.width; ++x) {
+                        if (y >= depth_frame.rows || x >= depth_frame.cols) continue;
+                        cv::Point2i pixel(x, y);
+                        if (!isPointInsideBoundary(pixel, config)) continue;
+
+                        float confidence = confidence_frame.at<float>(y, x);
+                        if (confidence < confidence_threshold) continue;
+
+                        float depth = depth_frame.at<float>(y, x);
+                        if (depth <= 100 || depth >= max_valid_depth_mm) continue;
+
+                        float baseline_depth_at_pixel = baseline_depth.at<float>(y, x);
+                        if (baseline_depth_at_pixel <= 100 || baseline_depth_at_pixel >= max_valid_depth_mm) continue;
+
+                        float wall_depth = interpolateWallDepth(pixel, config);
+                        bool has_pixel_motion = (baseline_depth_at_pixel - depth) > motion_threshold_mm;
+                        bool penetrates_wall = depth < wall_depth - config.penetration_threshold_mm;
+                        if (has_pixel_motion && penetrates_wall) {
+                            cluster.interference_pixel_count++;
+                            hit_depth_sum += depth;
+                            hit_x_sum += static_cast<float>(x);
+                            hit_y_sum += static_cast<float>(y);
+                        }
+                    }
+                }
+
+                cluster.interference_pixel_ratio = cluster.valid_pixel_count > 0
+                    ? static_cast<float>(cluster.interference_pixel_count) / cluster.valid_pixel_count
+                    : 0.0f;
+
+                if (cluster.interference_pixel_count >= min_interference_pixels) {
+                    cluster.has_motion = true;
+                    cluster.penetrates_wall = true;
+                    cluster.median_depth = hit_depth_sum / cluster.interference_pixel_count;
+                    cluster.pixel_center = cv::Point2i(
+                        static_cast<int>(std::round(hit_x_sum / cluster.interference_pixel_count)),
+                        static_cast<int>(std::round(hit_y_sum / cluster.interference_pixel_count)));
+                }
+            }
+             
             // Compute baseline median if available
-            if (!baseline_depth.empty()) {
+            if (!baseline_depth.empty() && !(far_object_mode && cluster.penetrates_wall)) {
                 int baseline_valid_count = 0;
                 cluster.baseline_median = computeClusterMedianDepth(
                     baseline_depth, confidence_frame, cluster.bounds,

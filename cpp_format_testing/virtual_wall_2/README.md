@@ -254,6 +254,7 @@ cd runtime
    - It auto-selects display max distance, valid depth max, confidence threshold, and motion threshold.
    - This helps shelves farther from the camera by avoiding fixed `3500mm` and fixed confidence assumptions.
    - Far shelf mode lowers the minimum valid pixels per cluster and applies wall-centered depth contrast for clearer saved depth images.
+   - Far shelf mode also counts individual penetrating pixels inside each cluster, so thin/far hands can be detected even when the full 10x10 cluster median remains background.
    - Selected values are printed to the console and saved under `metadata.json` as `auto_tuned_parameters`.
 
 **Monitor UI Controls:**

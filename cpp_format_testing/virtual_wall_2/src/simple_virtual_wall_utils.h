@@ -105,6 +105,8 @@ struct DepthCluster {
     float median_depth;          // Median depth (filters outliers!)
     float baseline_median;       // Baseline median depth
     int valid_pixel_count;       // Number of valid pixels in cluster
+    int interference_pixel_count; // Number of individual pixels that penetrate the wall
+    float interference_pixel_ratio;
     bool has_motion;             // Whether cluster shows significant motion
     bool penetrates_wall;        // Whether cluster penetrates virtual wall
     
@@ -115,6 +117,8 @@ struct DepthCluster {
         median_depth(0),
         baseline_median(0),
         valid_pixel_count(0),
+        interference_pixel_count(0),
+        interference_pixel_ratio(0),
         has_motion(false),
         penetrates_wall(false) {}
 };
@@ -262,7 +266,9 @@ public:
                                                          int confidence_threshold,
                                                          float motion_threshold_mm,
                                                          float max_valid_depth_mm = 3500.0f,
-                                                         int min_valid_pixels = 3);
+                                                         int min_valid_pixels = 3,
+                                                         bool far_object_mode = false,
+                                                         int min_interference_pixels = 2);
     
     // ===========================================================================================
     // VISUALIZATION
