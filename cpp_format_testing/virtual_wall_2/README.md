@@ -220,10 +220,20 @@ cd runtime
 
    Output location:
    ```bash
-   recorded_actions/YYYY-MM-DD/action_000001_YYYYMMDD_HHMMSS_mmm_unknown/
+   recorded_actions/YYYY-MM-DD/action_1/
    ```
 
    The path is relative to the directory where the monitor is started. If you start it from `runtime/`, recordings are saved under `runtime/recorded_actions/`. If you start it from `build/`, recordings are saved under `build/recorded_actions/`.
+
+   Action folder numbers are scoped per day. If `action_1` through `action_6` already exist in today's folder, the next recording will be `action_7`.
+
+   To fully reset runtime recordings and event logs:
+   ```bash
+   cd runtime
+   python3 reset.py
+   ```
+
+   This deletes and recreates `recorded_actions/` and `logs/`. It does not delete the monitor binary, setup binary, or `simple_virtual_wall_config.json`.
 
    Folder contents:
    ```text

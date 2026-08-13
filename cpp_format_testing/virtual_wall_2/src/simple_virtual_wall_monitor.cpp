@@ -475,21 +475,27 @@ private:
     }
 
     void startActionRecording(const std::vector<DepthCluster>& clusters) {
+        if (recording_state_ != RecordingState::IDLE) {
+            return;
+        }
+
+        current_action_ = ActionRecordingSession();
+        current_action_.start_timestamp = SimpleVirtualWallUtils::getCurrentTimestamp();
+        current_action_.start_time = std::chrono::steady_clock::now();
+
+        std::string day = getDayFromTimestamp(current_action_.start_timestamp);
+        std::filesystem::path day_dir = recordings_base_dir_ / day;
+        std::filesystem::create_directories(day_dir);
+
+        action_counter_ = getNextActionNumber(day_dir);
         action_counter_++;
         interference_count_++;
         recording_state_ = RecordingState::RECORDING;
         clear_frame_count_ = 0;
 
-        current_action_ = ActionRecordingSession();
-        current_action_.start_timestamp = SimpleVirtualWallUtils::getCurrentTimestamp();
-        current_action_.start_time = std::chrono::steady_clock::now();
-        current_action_.action_id = buildActionId(current_action_.start_timestamp);
+        current_action_.action_id = buildActionId(action_counter_);
 
-        std::string day = current_action_.start_timestamp.substr(0, 4) + "-" +
-                          current_action_.start_timestamp.substr(4, 2) + "-" +
-                          current_action_.start_timestamp.substr(6, 2);
-
-        current_action_.session_dir = recordings_base_dir_ / day / current_action_.action_id;
+        current_action_.session_dir = day_dir / current_action_.action_id;
         current_action_.frames_display_dir = current_action_.session_dir / "frames" / "display_png";
         current_action_.frames_depth_png_dir = current_action_.session_dir / "frames" / "depth_png";
         current_action_.frames_depth_raw_dir = current_action_.session_dir / "frames" / "depth_raw";
@@ -510,10 +516,45 @@ private:
         std::cout << "   Folder: " << current_action_.session_dir << std::endl;
     }
 
-    std::string buildActionId(const std::string& timestamp) const {
+    std::string getDayFromTimestamp(const std::string& timestamp) const {
+        if (timestamp.size() < 8) {
+            return "unknown_date";
+        }
+
+        return timestamp.substr(0, 4) + "-" +
+               timestamp.substr(4, 2) + "-" +
+               timestamp.substr(6, 2);
+    }
+
+    int getNextActionNumber(const std::filesystem::path& day_dir) const {
+        int max_action_number = 0;
+
+        if (!std::filesystem::exists(day_dir)) {
+            return 0;
+        }
+
+        for (const auto& entry : std::filesystem::directory_iterator(day_dir)) {
+            if (!entry.is_directory()) continue;
+
+            std::string folder_name = entry.path().filename().string();
+            const std::string prefix = "action_";
+            if (folder_name.rfind(prefix, 0) != 0) continue;
+
+            std::string number_text = folder_name.substr(prefix.size());
+            try {
+                int number = std::stoi(number_text);
+                max_action_number = std::max(max_action_number, number);
+            } catch (const std::exception&) {
+                continue;
+            }
+        }
+
+        return max_action_number;
+    }
+
+    std::string buildActionId(int action_number) const {
         std::ostringstream ss;
-        ss << "action_" << std::setfill('0') << std::setw(6) << action_counter_
-           << "_" << timestamp << "_unknown";
+        ss << "action_" << action_number;
         return ss.str();
     }
 
@@ -648,9 +689,7 @@ private:
     
     void logInterferenceEventFromClusters(const std::vector<DepthCluster>& clusters) {
         if (clusters.empty()) return;
-        
-        interference_count_++;  // Increment ONCE per detection!
-        
+
         // Find cluster with maximum penetration
         float max_penetration = 0;
         const DepthCluster* primary_cluster = &clusters[0];
