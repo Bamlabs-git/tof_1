@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <cmath>
 #include <fstream>
+#include <condition_variable>
 #include "simple_virtual_wall_utils.h"
 #include "common.h"
 #include "warning_suppression.h"
@@ -51,6 +52,7 @@ private:
         size_t max_cluster_count;
         int frame_count;
         int pre_roll_frame_count;
+        int post_roll_frame_count;
         std::chrono::steady_clock::time_point start_time;
 
         ActionRecordingSession() :
@@ -60,12 +62,26 @@ private:
             max_penetration_mm(0),
             max_cluster_count(0),
             frame_count(0),
-            pre_roll_frame_count(0) {}
+            pre_roll_frame_count(0),
+            post_roll_frame_count(0) {}
     };
 
     struct BufferedRecordingFrame {
         cv::Mat depth_frame;
         cv::Mat confidence_frame;
+    };
+
+    struct RecordingFrameJob {
+        int frame_number;
+        cv::Mat depth_frame;
+        cv::Mat confidence_frame;
+        std::filesystem::path frames_depth_png_dir;
+        std::filesystem::path frames_depth_raw_dir;
+        std::filesystem::path frames_confidence_raw_dir;
+        std::string action_id;
+        bool is_shutdown;
+
+        RecordingFrameJob() : frame_number(0), is_shutdown(false) {}
     };
 
     std::unique_ptr<CameraManager> camera_manager_;
@@ -112,9 +128,17 @@ private:
     int action_counter_;
     int clear_frame_count_;
     std::deque<BufferedRecordingFrame> pre_roll_buffer_;
+    std::deque<RecordingFrameJob> recording_queue_;
+    std::mutex recording_queue_mutex_;
+    std::condition_variable recording_queue_cv_;
+    std::thread recording_writer_thread_;
+    std::mutex video_writer_mutex_;
+    bool recording_writer_running_;
+    static constexpr size_t MAX_RECORDING_QUEUE_SIZE = 300;
     static constexpr int START_CONFIRM_FRAMES = 2;
-    static constexpr int PRE_ROLL_FRAMES = 60; // ~2 seconds at 30 FPS
-    static constexpr int CLEAR_CONFIRM_FRAMES = 30; // ~1 second at 30 FPS
+    static constexpr int PRE_ROLL_FRAMES = 5;
+    static constexpr int POST_ROLL_FRAMES = 5;
+    static constexpr int CLEAR_CONFIRM_FRAMES = 5;
     static constexpr int MAX_ACTION_FRAMES = 450; // Safety cap: ~15 seconds at 30 FPS
     static constexpr double RECORDING_FPS = 30.0;
     
@@ -139,6 +163,7 @@ public:
         recording_state_(RecordingState::IDLE),
         action_counter_(0),
         clear_frame_count_(0),
+        recording_writer_running_(true),
         
         baseline_established_(false),
         baseline_frame_count_(0),
@@ -151,6 +176,7 @@ public:
         std::filesystem::path log_file = log_dir / ("simple_interference_events_" + 
                                                    SimpleVirtualWallUtils::getCurrentTimestamp() + ".json");
         log_file_path_ = log_file.string();
+        recording_writer_thread_ = std::thread(&SimpleVirtualWallMonitor::recordingWriterLoop, this);
     }
     
     ~SimpleVirtualWallMonitor() {
@@ -161,6 +187,7 @@ public:
         if (recording_state_ != RecordingState::IDLE) {
             finishActionRecording();
         }
+        stopRecordingWriter();
     }
     
     bool initialize() {
@@ -486,7 +513,7 @@ private:
             }
         } else if (recording_state_ != RecordingState::IDLE) {
             clear_frame_count_++;
-            if (clear_frame_count_ >= CLEAR_CONFIRM_FRAMES || current_action_.frame_count >= MAX_ACTION_FRAMES) {
+            if (clear_frame_count_ > POST_ROLL_FRAMES || current_action_.frame_count >= MAX_ACTION_FRAMES) {
                 finishActionRecording();
                 return;
             }
@@ -635,45 +662,119 @@ private:
     void writePreRollFrames() {
         current_action_.pre_roll_frame_count = static_cast<int>(pre_roll_buffer_.size());
         for (const auto& frame : pre_roll_buffer_) {
-            writeRecordingFrame(frame.depth_frame, frame.confidence_frame);
+            enqueueRecordingFrame(frame.depth_frame, frame.confidence_frame);
         }
     }
 
     void recordActionFrame() {
-        writeRecordingFrame(depth_frame_, confidence_frame_);
+        if (recording_state_ == RecordingState::ENDING) {
+            current_action_.post_roll_frame_count++;
+        }
+        enqueueRecordingFrame(depth_frame_, confidence_frame_);
     }
 
-    void writeRecordingFrame(const cv::Mat& depth_frame, const cv::Mat& confidence_frame) {
+    void enqueueRecordingFrame(const cv::Mat& depth_frame, const cv::Mat& confidence_frame) {
         if (depth_frame.empty()) return;
 
-        int frame_number = current_action_.frame_count + 1;
+        RecordingFrameJob job;
+        job.frame_number = current_action_.frame_count + 1;
+        job.depth_frame = depth_frame.clone();
+        if (!confidence_frame.empty()) {
+            job.confidence_frame = confidence_frame.clone();
+        }
+        job.frames_depth_png_dir = current_action_.frames_depth_png_dir;
+        job.frames_depth_raw_dir = current_action_.frames_depth_raw_dir;
+        job.frames_confidence_raw_dir = current_action_.frames_confidence_raw_dir;
+        job.action_id = current_action_.action_id;
+
+        {
+            std::lock_guard<std::mutex> lock(recording_queue_mutex_);
+            if (recording_queue_.size() >= MAX_RECORDING_QUEUE_SIZE) {
+                recording_queue_.pop_front();
+                std::cout << "⚠️  Recording queue full; dropped oldest pending frame" << std::endl;
+            }
+            recording_queue_.push_back(std::move(job));
+        }
+        recording_queue_cv_.notify_one();
+
+        current_action_.frame_count++;
+    }
+
+    void recordingWriterLoop() {
+        while (true) {
+            RecordingFrameJob job;
+            {
+                std::unique_lock<std::mutex> lock(recording_queue_mutex_);
+                recording_queue_cv_.wait(lock, [this]() {
+                    return !recording_queue_.empty() || !recording_writer_running_;
+                });
+
+                if (recording_queue_.empty() && !recording_writer_running_) {
+                    break;
+                }
+
+                job = std::move(recording_queue_.front());
+                recording_queue_.pop_front();
+            }
+
+            if (job.is_shutdown) {
+                break;
+            }
+
+            writeRecordingFrameJob(job);
+        }
+    }
+
+    void writeRecordingFrameJob(const RecordingFrameJob& job) {
         std::ostringstream name;
-        name << "frame_" << std::setfill('0') << std::setw(6) << frame_number;
+        name << "frame_" << std::setfill('0') << std::setw(6) << job.frame_number;
 
-        cv::Mat depth_vis = createDepthVisualization(depth_frame, confidence_frame);
-        cv::imwrite((current_action_.frames_depth_png_dir / (name.str() + ".png")).string(), depth_vis);
+        cv::Mat depth_vis = createDepthVisualization(job.depth_frame, job.confidence_frame);
+        cv::imwrite((job.frames_depth_png_dir / (name.str() + ".png")).string(), depth_vis);
 
-        cv::FileStorage depth_file((current_action_.frames_depth_raw_dir / (name.str() + ".yml")).string(), cv::FileStorage::WRITE);
-        depth_file << "depth_mm" << depth_frame;
+        cv::FileStorage depth_file((job.frames_depth_raw_dir / (name.str() + ".yml")).string(), cv::FileStorage::WRITE);
+        depth_file << "depth_mm" << job.depth_frame;
         depth_file.release();
 
-        if (!confidence_frame.empty()) {
-            cv::FileStorage confidence_file((current_action_.frames_confidence_raw_dir / (name.str() + ".yml")).string(), cv::FileStorage::WRITE);
-            confidence_file << "confidence" << confidence_frame;
+        if (!job.confidence_frame.empty()) {
+            cv::FileStorage confidence_file((job.frames_confidence_raw_dir / (name.str() + ".yml")).string(), cv::FileStorage::WRITE);
+            confidence_file << "confidence" << job.confidence_frame;
             confidence_file.release();
         }
 
-        if (current_action_.depth_video.isOpened()) {
+        std::lock_guard<std::mutex> video_lock(video_writer_mutex_);
+        if (current_action_.action_id == job.action_id && current_action_.depth_video.isOpened()) {
             current_action_.depth_video.write(depth_vis);
         }
+    }
 
-        current_action_.frame_count++;
+    void waitForRecordingQueueToDrain() {
+        while (true) {
+            {
+                std::lock_guard<std::mutex> lock(recording_queue_mutex_);
+                if (recording_queue_.empty()) return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+
+    void stopRecordingWriter() {
+        {
+            std::lock_guard<std::mutex> lock(recording_queue_mutex_);
+            recording_writer_running_ = false;
+        }
+        recording_queue_cv_.notify_all();
+        if (recording_writer_thread_.joinable()) {
+            recording_writer_thread_.join();
+        }
     }
 
     void finishActionRecording() {
         if (recording_state_ == RecordingState::IDLE) return;
 
         current_action_.end_timestamp = SimpleVirtualWallUtils::getCurrentTimestamp();
+        waitForRecordingQueueToDrain();
+        std::lock_guard<std::mutex> video_lock(video_writer_mutex_);
         if (current_action_.depth_video.isOpened()) current_action_.depth_video.release();
         saveActionMetadata();
 
@@ -698,8 +799,9 @@ private:
         root["frame_count"] = current_action_.frame_count;
         root["pre_roll_frames"] = current_action_.pre_roll_frame_count;
         root["pre_roll_seconds_target"] = PRE_ROLL_FRAMES / RECORDING_FPS;
-        root["post_clear_frames_target"] = CLEAR_CONFIRM_FRAMES;
-        root["post_clear_seconds_target"] = CLEAR_CONFIRM_FRAMES / RECORDING_FPS;
+        root["post_roll_frames"] = current_action_.post_roll_frame_count;
+        root["post_roll_frames_target"] = POST_ROLL_FRAMES;
+        root["post_roll_seconds_target"] = POST_ROLL_FRAMES / RECORDING_FPS;
         root["fps_target"] = RECORDING_FPS;
         root["recorded_content"].append("depth_png");
         root["recorded_content"].append("depth_raw");

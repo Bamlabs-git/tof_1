@@ -214,10 +214,11 @@ cd runtime
 
 5. **Automatic action recording:**
    - When interference is confirmed, the monitor creates one action folder.
-   - Recording includes about 2 seconds before the confirmed interference.
+   - Recording includes 5 frames before the confirmed interference.
    - Recording continues while the hand/object remains inside the wall.
-   - Recording stops after the wall is clear for about 1 second.
+   - Recording stops after 5 frames after the wall is clear.
    - A continuous hand presence is counted once, not repeatedly every second.
+   - Frame/video saving runs on a background writer thread so detection is not blocked by disk I/O.
 
    Output location:
    ```bash
